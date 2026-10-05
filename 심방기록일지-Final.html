@@ -225,8 +225,17 @@
         window.alert = function() { console.warn("브라우저 알림창이 차단되었습니다."); };
         window.confirm = function() { console.warn("브라우저 확인창이 차단되었습니다."); return false; };
 
-        // [중요] 여기에 배포된 구글 앱스 스크립트 URL을 입력하세요.
+        // 배포된 구글 앱스 스크립트 URL
         const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbysXkr9OEVnX43o2IvcG-XwZTkOTPazHsw54LsgZNDuDiwmGvaDu2lkAQQ3cwzMDDhb/exec"; 
+
+        // 현지(시카고) 기준 오늘 날짜 (toISOString은 UTC라 저녁 시간대에 다음 날로 바뀜)
+        function todayLocal() {
+            const d = new Date();
+            const y = d.getFullYear();
+            const m = String(d.getMonth() + 1).padStart(2, '0');
+            const day = String(d.getDate()).padStart(2, '0');
+            return `${y}-${m}-${day}`;
+        }
 
         function showMessage(text, type = 'success') {
             const msgBox = document.getElementById('status-msg');
@@ -258,43 +267,32 @@
             }, 3000);
         }
 
-        function executeClear() {
+        function resetFormToToday() {
             document.getElementById('visit-form').reset();
             document.getElementById('search-name').value = '';
             document.getElementById('visit-count-display').style.display = 'none';
-            const today = new Date().toISOString().split('T')[0];
-            document.getElementById('visitDate').value = today;
+            document.getElementById('visitDate').value = todayLocal();
+        }
+
+        function executeClear() {
+            resetFormToToday();
             showMessage("모든 입력란이 초기화되었습니다.", "info");
             window.scrollTo({ top: 0, behavior: 'smooth' });
         }
 
-        function formatTime(timeStr) {
-            if (!timeStr) return '';
-            if (timeStr.toString().includes('T') || !isNaN(Date.parse(timeStr))) {
-                const d = new Date(timeStr);
-                return d.toTimeString().slice(0, 5);
-            }
-            return timeStr.toString().slice(0, 5);
-        }
-
+        // 백엔드(doGet)가 반환하는 필드명에 맞춰 폼 채우기
         function fillForm(data) {
             if (!data) return;
-            let dateVal = '';
-            if (data.date) {
-                const d = new Date(data.date);
-                if (!isNaN(d)) dateVal = d.toISOString().split('T')[0];
-            }
-
-            document.getElementById('visitDate').value = dateVal;
-            document.getElementById('startTime').value = formatTime(data.start);
-            document.getElementById('endTime').value = formatTime(data.end);
-            document.getElementById('targetName').value = data.target || '';
-            document.getElementById('visitorList').value = data.visitors || '';
-            document.getElementById('requestor').value = data.req || '';
-            document.getElementById('reason').value = data.res || '';
-            document.getElementById('location').value = data.loc || '';
-            document.getElementById('details').value = data.det || '';
-            document.getElementById('followUp').value = data.fup || '';
+            document.getElementById('visitDate').value   = data.visitDate || '';
+            document.getElementById('startTime').value   = String(data.startTime || '').slice(0, 5);
+            document.getElementById('endTime').value     = String(data.endTime || '').slice(0, 5);
+            document.getElementById('targetName').value  = data.targetName || '';
+            document.getElementById('visitorList').value = data.visitorList || '';
+            document.getElementById('requestor').value   = data.requestor || '';
+            document.getElementById('reason').value      = data.reason || '';
+            document.getElementById('location').value    = data.location || '';
+            document.getElementById('details').value     = data.details || '';
+            document.getElementById('followUp').value    = data.followUp || '';
             
             const form = document.getElementById('visit-form');
             form.classList.add('bg-indigo-50/30');
@@ -320,12 +318,16 @@
             try {
                 const response = await fetch(`${APPS_SCRIPT_URL}?action=search&name=${encodeURIComponent(name)}`);
                 const results = await response.json();
+
+                if (results && results.error) {
+                    throw new Error(results.error);
+                }
                 
-                if (results && results.length > 0) {
+                if (Array.isArray(results) && results.length > 0) {
                     countDisplay.innerText = `총 ${results.length}회 심방`;
                     countDisplay.style.display = 'inline-flex';
                     fillForm(results[results.length - 1]);
-                    showMessage(`'${name}' 성도님의 기록을 불러왔습니다.`);
+                    showMessage(`'${name}' 성도님의 최근 기록을 불러왔습니다.`);
                 } else {
                     showMessage("해당 이름으로 등록된 기록이 없습니다.", "error");
                 }
@@ -348,7 +350,7 @@
             const form = document.getElementById('visit-form');
             
             if (!form.checkValidity()) {
-                showMessage("필수 항목(*)을 모두 입력해주세요.", "error");
+                showMessage("모든 항목을 입력해주세요.", "error");
                 const firstInvalid = form.querySelector(':invalid');
                 if (firstInvalid) firstInvalid.focus();
                 return;
@@ -377,27 +379,25 @@
             btnText.innerHTML = `<div class="loading-spinner mr-2"></div> 저장 중...`;
 
             try {
-                // 이메일 발송과 데이터 저장을 위해 'no-cors'를 제거하거나 폼 데이터 형식으로 전달 시도
+                // text/plain 본문으로 보내 CORS preflight 없이 응답을 읽을 수 있음
                 const response = await fetch(APPS_SCRIPT_URL, {
                     method: 'POST',
-                    // mode: 'no-cors'를 제거하여 성공 여부를 추적할 수 있도록 변경 (CORS 정책에 따라 서버 응답 확인 가능)
+                    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
                     body: JSON.stringify(formData)
                 });
-                
-                // 앱스 스크립트에서 응답이 올 경우 (CORS 허용 시)
-                showMessage("심방 기록이 성공적으로 저장되었습니다. 이메일 전송이 시작되었습니다.");
-                
-                form.reset();
-                const today = new Date().toISOString().split('T')[0];
-                document.getElementById('visitDate').value = today;
-                document.getElementById('visit-count-display').style.display = 'none';
-                document.getElementById('search-name').value = '';
+                const resultText = (await response.text()).trim();
+
+                if (resultText !== 'Success') {
+                    throw new Error(resultText || '알 수 없는 응답');
+                }
+
+                showMessage("심방 기록이 저장되었고 보고 메일이 발송되었습니다.");
+                resetFormToToday();
                 window.scrollTo({ top: 0, behavior: 'smooth' });
                 
             } catch (error) {
                 console.error("Save Error:", error);
-                // fetch 오류가 나더라도 'no-cors' 환경에서는 실제로는 데이터가 갔을 수 있습니다.
-                showMessage("저장 요청을 보냈습니다. (네트워크 상태를 확인해주세요)", "info");
+                showMessage("저장에 실패했습니다. 입력 내용은 그대로 남아 있으니 다시 시도해주세요.", "error");
             } finally {
                 btn.disabled = false;
                 icon.classList.remove('hidden');
@@ -406,8 +406,7 @@
         });
 
         window.onload = () => {
-            const today = new Date().toISOString().split('T')[0];
-            document.getElementById('visitDate').value = today;
+            document.getElementById('visitDate').value = todayLocal();
         };
     </script>
 </body>
